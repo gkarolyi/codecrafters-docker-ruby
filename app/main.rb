@@ -8,4 +8,5 @@ args = ARGV[3..]
 
 stdout, stderr, status = Open3.capture3(command, *args)
 
-puts stdout
+STDOUT.write(stdout)
+STDERR.write(stderr)

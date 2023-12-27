@@ -1,11 +1,23 @@
 require "open3"
+require 'tmpdir'
+require 'fileutils'
+require 'pathname'
 
 command = ARGV[2]
 args = ARGV[3..]
 
-stdout, stderr, status = Open3.capture3(command, *args)
+Dir.mktmpdir(nil, '.') do |dir|
+  work_dir = Pathname.new(File.join(dir, command))
+  FileUtils.mkdir_p(work_dir)
 
-STDOUT.write(stdout)
-STDERR.write(stderr)
+  FileUtils.cp(command, work_dir)
 
-exit(status.exitstatus)
+  Dir.chroot(dir)
+
+  stdout, stderr, status = Open3.capture3(command, *args)
+
+  STDOUT.write(stdout)
+  STDERR.write(stderr)
+
+  exit(status.exitstatus)
+end

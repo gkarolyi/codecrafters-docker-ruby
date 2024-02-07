@@ -6,41 +6,34 @@ require_relative 'auth'
 
 module Docker
   class Chroot
-    attr_reader :command, :dir, :tag
+    attr_reader :command, :dir, :auth
 
-    CLONE_NEWPID = 0x20000000
-    UNSHARE = Fiddle::Function.new(
-      Fiddle::Handle::DEFAULT['unshare'],
-      [Fiddle::TYPE_INT],
-      Fiddle::TYPE_INT
-    )
-
-    def self.for(tag, command, &block)
+    def self.for(docker_tag, command, &block)
       begin
-        chroot = new(tag, command)
+        chroot = new(docker_tag, command)
         chroot.extract_layers!
-        chroot.create!
+        chroot.create_jail!
+        chroot.create_pid_namespace!
         yield
       ensure
         FileUtils.rm_rf(chroot.dir)
       end
     end
 
-    def initialize(tag, command)
+    def initialize(docker_tag, command)
       @command = command
-      @tag = tag
+      @auth = Auth.new(docker_tag)
       @dir = Dir.mktmpdir
     end
 
     def extract_layers!
       Dir.mktmpdir do |tmp_dir|
-        auth = Auth.new('alpine:latest')
         auth.pull_layers(folder: tmp_dir)
         system("tar xf #{tmp_dir}/* -C #{dir}")
       end
     end
 
-    def create!
+    def create_jail!
       FileUtils.mkdir_p(work_dir)
       FileUtils.mkdir_p(proc_dir)
 
@@ -52,13 +45,25 @@ module Docker
       system("mount -t proc none #{proc_dir}")
       Dir.chdir(dir)
       Dir.chroot(dir)
+    end
 
-      new_pid = UNSHARE.call(CLONE_NEWPID)
+    def create_pid_namespace!
+      new_pid = unshare.call(0x20000000)
 
       if new_pid != 0
         puts "Error: Failed to create new PID namespace"
         exit 1
       end
+    end
+
+    private
+
+    def unshare
+      @unshare ||= Fiddle::Function.new(
+        Fiddle::Handle::DEFAULT['unshare'],
+        [Fiddle::TYPE_INT],
+        Fiddle::TYPE_INT
+      )
     end
 
     def work_dir

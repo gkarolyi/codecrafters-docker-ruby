@@ -9,9 +9,23 @@ module Docker
     attr_reader :image, :version
 
     def initialize(docker_tag)
-      @image = docker_tag.split(':').first
-      @version = docker_tag.split(':').last
+      @image, @version = docker_tag.split(':')
+      @version ||= 'latest'
     end
+
+    def pull_layers(folder:)
+      layers.each do |layer|
+        digest = layer['digest']
+        response = pull_layer(digest: digest)
+        file_blob = digest.split(':').last[..5]
+
+        File.open("#{folder}/#{image}-layer-#{file_blob}", 'w') do |file|
+          file.write(response)
+        end
+      end
+    end
+
+    private
 
     def token
       response = request(
@@ -48,17 +62,6 @@ module Docker
       end
     end
 
-    def pull_layers(folder:)
-      layers.each do |layer|
-        digest = layer['digest']
-        response = pull_layer(digest: digest)
-        file_blob = digest.split(':').last[..5]
-
-        File.open("#{folder}/#{image}-layer-#{file_blob}", 'w') do |file|
-          file.write(response)
-        end
-      end
-    end
 
     def pull_layer(digest:)
       response = request(

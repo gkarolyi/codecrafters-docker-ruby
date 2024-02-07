@@ -14,72 +14,76 @@ module Docker
     end
 
     def token
-      @token ||= Net::HTTP.start('auth.docker.io', 443, use_ssl: true) do |http|
-        request = Net::HTTP::Get.new("/token?service=registry.docker.io&scope=repository:library/#{image}:pull")
-        response = http.request(request)
+      response = request(
+        hostname: 'auth.docker.io',
+        path: "/token?service=registry.docker.io&scope=repository:library/#{image}:pull"
+      )
+      return response.to_hash unless response.code == '200'
 
-        if response.code == '200'
-          return JSON.parse(response.body)['token']
-        else
-          puts "Error: Failed to authenticate with Docker Hub"
-          exit 1
-        end
-      end
+      JSON.parse(response.body)['token']
     end
 
     def manifest
-      @manifest ||= Net::HTTP.start('registry.hub.docker.com', 443, use_ssl: true) do |http|
-        request = Net::HTTP::Get.new("/v2/library/#{image}/manifests/#{version}")
-        request['Authorization'] = "Bearer #{token}"
-        request['Accept'] = "application/vnd.docker.distribution.manifest.v2+json"
-        response = http.request(request)
+      response = request(
+        hostname: 'registry.hub.docker.com',
+        path: "/v2/library/#{image}/manifests/#{version}",
+        headers: {
+          Authorization: "Bearer #{token}",
+          Accept: "application/vnd.docker.distribution.manifest.v2+json"
+        }
+      )
+      return response.to_hash unless response.code == '200'
 
-        if response.code == '200'
-          return JSON.parse(response.body)['manifests']
-        else
-          puts "Error: Failed to fetch manifest from Docker Hub"
-          exit 1
-        end
-      end
+      JSON.parse(response.body)
     end
 
     def layers
-      @layers ||= manifest.select do |layer|
-        layer['platform']['architecture'] == ARCHITECTURE &&
-        layer['platform']['os'] == OS
+      if manifest['manifests']
+        manifest['manifests'].select do |layer|
+          layer['platform']['architecture'] == ARCHITECTURE &&
+          layer['platform']['os'] == OS
+        end
+      else
+        manifest['layers']
       end
     end
 
-    def pull_layers!
+    def pull_layers(folder:)
       layers.each do |layer|
         digest = layer['digest']
-        p "digest: #{digest}"
-        Net::HTTP.start('registry.hub.docker.com', 443, use_ssl: true) do |http|
-          request = Net::HTTP::Get.new("/v2/library/#{image}/blobs/#{digest}")
-          request['Authorization'] = "Bearer #{token}"
-          # request['Accept'] = "application/vnd.docker.distribution.manifest.v2+json"
-          binding.irb
-          response = http.request(request)
-          return JSON.parse(response.body)
+        response = pull_layer(digest: digest)
+        file_blob = digest.split(':').last[..5]
 
-          if response.code == '200'
-            return JSON.parse(response.body)
-          else
-            puts "Error: Failed to fetch layer from Docker Hub"
-            exit 1
-          end
+        File.open("#{folder}/#{image}-layer-#{file_blob}", 'w') do |file|
+          file.write(response)
         end
       end
     end
 
-    def request(hostname:, path:, token: nil)
+    def pull_layer(digest:)
+      response = request(
+        hostname: 'registry.hub.docker.com',
+        path: "/v2/library/#{image}/blobs/#{digest}",
+        headers: {
+          Authorization: "Bearer #{token}"
+        }
+      )
+      return response.body unless response.code == '307'
+
+      uri = URI(response.to_hash['location'].first)
+      Net::HTTP.get(uri)
+    end
+
+    def request(hostname:, path:, headers: nil)
       Net::HTTP.start(hostname, 443, use_ssl: true) do |http|
         request = Net::HTTP::Get.new(path)
-        request['Authorization'] = "Bearer #{token}" if token
-        # request['Accept'] = "application/vnd.docker.distribution.manifest.v2+json"
-        response = http.request(request)
 
-        return JSON.parse(response.body)
+        if headers
+          request['Authorization'] = headers[:Authorization]
+          request['Accept'] = headers[:Accept]
+        end
+
+        http.request(request)
       end
     end
   end

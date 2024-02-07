@@ -1,6 +1,12 @@
+require 'tmpdir'
+require 'fileutils'
+require 'fiddle'
+
+require_relative 'auth'
+
 module Docker
   class Chroot
-    attr_reader :command, :dir
+    attr_reader :command, :dir, :tag
 
     CLONE_NEWPID = 0x20000000
     UNSHARE = Fiddle::Function.new(
@@ -9,9 +15,10 @@ module Docker
       Fiddle::TYPE_INT
     )
 
-    def self.for(command, &block)
+    def self.for(tag, command, &block)
       begin
-        chroot = new(command)
+        chroot = new(tag, command)
+        chroot.extract_layers!
         chroot.create!
         yield
       ensure
@@ -19,18 +26,30 @@ module Docker
       end
     end
 
-    def initialize(command)
+    def initialize(tag, command)
       @command = command
+      @tag = tag
       @dir = Dir.mktmpdir
+    end
+
+    def extract_layers!
+      Dir.mktmpdir do |tmp_dir|
+        auth = Auth.new('alpine:latest')
+        auth.pull_layers(folder: tmp_dir)
+        system("tar xf #{tmp_dir}/* -C #{dir}")
+      end
     end
 
     def create!
       FileUtils.mkdir_p(work_dir)
       FileUtils.mkdir_p(proc_dir)
 
-      FileUtils.cp(command, work_dir)
-      system("mount -t proc none #{proc_dir}")
+      begin
+        FileUtils.cp(command, work_dir)
+      rescue ArgumentError
+      end
 
+      system("mount -t proc none #{proc_dir}")
       Dir.chdir(dir)
       Dir.chroot(dir)
 
